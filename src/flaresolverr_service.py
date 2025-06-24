@@ -2,6 +2,7 @@ import logging
 import platform
 import sys
 import time
+import base64
 from datetime import timedelta
 from html import escape
 from urllib.parse import unquote, quote
@@ -150,8 +151,6 @@ def _cmd_request_get(req: V1RequestBase) -> V1ResponseBase:
         raise Exception("Cannot use 'postBody' when sending a GET request.")
     if req.returnRawHtml is not None:
         logging.warning("Request parameter 'returnRawHtml' was removed in FlareSolverr v2.")
-    if req.download is not None:
-        logging.warning("Request parameter 'download' was removed in FlareSolverr v2.")
 
     challenge_res = _resolve_challenge(req, 'GET')
     res = V1ResponseBase({})
@@ -167,8 +166,6 @@ def _cmd_request_post(req: V1RequestBase) -> V1ResponseBase:
         raise Exception("Request parameter 'postData' is mandatory in 'request.post' command.")
     if req.returnRawHtml is not None:
         logging.warning("Request parameter 'returnRawHtml' was removed in FlareSolverr v2.")
-    if req.download is not None:
-        logging.warning("Request parameter 'download' was removed in FlareSolverr v2.")
 
     challenge_res = _resolve_challenge(req, 'POST')
     res = V1ResponseBase({})
@@ -282,6 +279,33 @@ def click_verify(driver: WebDriver):
     time.sleep(2)
 
 
+def _download_binary_content(driver: WebDriver, url: str) -> str:
+    """
+    Download binary content from URL and return as base64 encoded string.
+    Uses JavaScript to fetch the content to avoid additional requests.
+    """
+    script = """
+    return fetch(arguments[0])
+        .then(response => response.blob())
+        .then(blob => new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result);
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+        }));
+    """
+    try:
+        data_url = driver.execute_script(script, url)
+        if data_url and data_url.startswith('data:'):
+            base64_data = data_url.split(',', 1)[1]
+            return base64_data
+        else:
+            raise Exception("Failed to download content")
+    except Exception as e:
+        logging.error(f"Error downloading binary content: {str(e)}")
+        raise
+
+
 def _evil_logic(req: V1RequestBase, driver: WebDriver, method: str) -> ChallengeResolutionT:
     res = ChallengeResolutionT({})
     res.status = STATUS_OK
@@ -390,7 +414,21 @@ def _evil_logic(req: V1RequestBase, driver: WebDriver, method: str) -> Challenge
 
     if not req.returnOnlyCookies:
         challenge_res.headers = {}  # todo: fix, selenium not provides this info
-        challenge_res.response = driver.page_source
+        
+        if req.download:
+            logging.info("Download mode enabled - downloading binary content...")
+            try:
+                base64_content = _download_binary_content(driver, driver.current_url)
+                challenge_res.response = base64_content
+                challenge_res.responseBase64 = True
+                logging.info("Binary content downloaded and encoded successfully")
+            except Exception as e:
+                logging.error(f"Failed to download binary content: {str(e)}")
+                challenge_res.response = driver.page_source
+                challenge_res.responseBase64 = False
+        else:
+            challenge_res.response = driver.page_source
+            challenge_res.responseBase64 = False
 
     res.result = challenge_res
     return res
