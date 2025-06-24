@@ -334,7 +334,14 @@ def _evil_logic(req: V1RequestBase, driver: WebDriver, method: str) -> Challenge
     # wait for the page
     if utils.get_config_log_html():
         logging.debug(f"Response HTML:\n{driver.page_source}")
-    html_element = driver.find_element(By.TAG_NAME, "html")
+    
+    # Try to find HTML element - may not exist for non-HTML content (SVG, images, etc.)
+    html_element = None
+    try:
+        html_element = driver.find_element(By.TAG_NAME, "html")
+    except Exception:
+        logging.debug("No HTML element found - likely non-HTML content")
+    
     page_title = driver.title
 
     # find access denied titles
@@ -351,19 +358,24 @@ def _evil_logic(req: V1RequestBase, driver: WebDriver, method: str) -> Challenge
 
     # find challenge by title
     challenge_found = False
-    for title in CHALLENGE_TITLES:
-        if title.lower() == page_title.lower():
-            challenge_found = True
-            logging.info("Challenge detected. Title found: " + page_title)
-            break
-    if not challenge_found:
-        # find challenge by selectors
-        for selector in CHALLENGE_SELECTORS:
-            found_elements = driver.find_elements(By.CSS_SELECTOR, selector)
-            if len(found_elements) > 0:
+    
+    # Skip challenge detection for non-HTML content
+    if html_element is None:
+        logging.debug("Skipping challenge detection for non-HTML content")
+    else:
+        for title in CHALLENGE_TITLES:
+            if title.lower() == page_title.lower():
                 challenge_found = True
-                logging.info("Challenge detected. Selector found: " + selector)
+                logging.info("Challenge detected. Title found: " + page_title)
                 break
+        if not challenge_found:
+            # find challenge by selectors
+            for selector in CHALLENGE_SELECTORS:
+                found_elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                if len(found_elements) > 0:
+                    challenge_found = True
+                    logging.info("Challenge detected. Selector found: " + selector)
+                    break
 
     attempt = 0
     if challenge_found:
@@ -390,13 +402,17 @@ def _evil_logic(req: V1RequestBase, driver: WebDriver, method: str) -> Challenge
                 click_verify(driver)
 
                 # update the html (cloudflare reloads the page every 5 s)
-                html_element = driver.find_element(By.TAG_NAME, "html")
+                try:
+                    html_element = driver.find_element(By.TAG_NAME, "html")
+                except Exception:
+                    pass
 
         # waits until cloudflare redirection ends
         logging.debug("Waiting for redirect")
         # noinspection PyBroadException
         try:
-            WebDriverWait(driver, SHORT_TIMEOUT).until(staleness_of(html_element))
+            if html_element:
+                WebDriverWait(driver, SHORT_TIMEOUT).until(staleness_of(html_element))
         except Exception:
             logging.debug("Timeout waiting for redirect")
 
@@ -427,7 +443,17 @@ def _evil_logic(req: V1RequestBase, driver: WebDriver, method: str) -> Challenge
                 challenge_res.response = driver.page_source
                 challenge_res.responseBase64 = False
         else:
-            challenge_res.response = driver.page_source
+            # For non-HTML content without download mode, try to get the content
+            if html_element is None:
+                logging.debug("Non-HTML content detected without download mode - attempting to retrieve content")
+                try:
+                    # Try to get the actual content using JavaScript
+                    content = driver.execute_script("return document.documentElement.outerHTML || document.body.textContent || '';")
+                    challenge_res.response = content if content else driver.page_source
+                except Exception:
+                    challenge_res.response = driver.page_source
+            else:
+                challenge_res.response = driver.page_source
             challenge_res.responseBase64 = False
 
     res.result = challenge_res
