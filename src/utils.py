@@ -129,7 +129,7 @@ def create_proxy_extension(proxy: dict) -> str:
     return proxy_extension_dir
 
 
-def get_webdriver(proxy: dict = None) -> WebDriver:
+def get_webdriver(proxy: dict = None, cdp_port: int = None) -> WebDriver:
     global PATCHED_DRIVER_PATH, USER_AGENT
     logging.debug('Launching web browser...')
 
@@ -150,9 +150,14 @@ def get_webdriver(proxy: dict = None) -> WebDriver:
     options.add_argument('--ignore-certificate-errors')
     options.add_argument('--ignore-ssl-errors')
     
-    cdp_port = os.environ.get('CDP_PORT', '9222')
-    options.debugger_address = f'127.0.0.1:{cdp_port}'
-    logging.info(f"Setting debugger_address to: {options.debugger_address}")
+    if cdp_port is not None:
+        options.debugger_address = f'127.0.0.1:{cdp_port}'
+        logging.info(f"Setting debugger_address to: {options.debugger_address}")
+    else:
+        env_cdp_port = os.environ.get('CDP_PORT')
+        if env_cdp_port:
+            options.debugger_address = f'127.0.0.1:{env_cdp_port}'
+            logging.info(f"Setting debugger_address from env to: {options.debugger_address}")
     
     if not get_config_headless():
         logging.info("Adding visibility flags for non-headless mode")

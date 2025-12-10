@@ -1,5 +1,6 @@
 import logging
 import os
+import socket
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Optional, Tuple
@@ -10,12 +11,22 @@ from selenium.webdriver.chrome.webdriver import WebDriver
 import utils
 
 
+def find_free_port() -> int:
+    """Find a free port on localhost"""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(('', 0))
+        s.listen(1)
+        port = s.getsockname()[1]
+    return port
+
+
 @dataclass
 class Session:
     session_id: str
     driver: WebDriver
     created_at: datetime
-    cdp_url: Optional[str] = None
+    cdp_port: int
+    cdp_url: str
 
     def lifetime(self) -> timedelta:
         return datetime.now() - self.created_at
@@ -47,13 +58,20 @@ class SessionsStorage:
         if self.exists(session_id):
             return self.sessions[session_id], False
 
-        driver = utils.get_webdriver(proxy)
-        created_at = datetime.now()
+        env_cdp_port = os.environ.get('CDP_PORT')
+        if env_cdp_port:
+            cdp_port = int(env_cdp_port)
+            logging.info(f"Using CDP_PORT from environment: {cdp_port}")
+        else:
+            cdp_port = find_free_port()
+            logging.info(f"Allocated dynamic CDP port: {cdp_port}")
         
-        cdp_port = os.environ.get('CDP_PORT', '9222')
         cdp_url = f'http://localhost:{cdp_port}'
         
-        session = Session(session_id, driver, created_at, cdp_url)
+        driver = utils.get_webdriver(proxy, cdp_port=cdp_port)
+        created_at = datetime.now()
+        
+        session = Session(session_id, driver, created_at, cdp_port, cdp_url)
 
         self.sessions[session_id] = session
 

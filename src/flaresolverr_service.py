@@ -227,6 +227,7 @@ def _cmd_sessions_info(req: V1RequestBase) -> V1ResponseBase:
         "message": "Session info retrieved successfully.",
         "session": session_id,
         "cdpUrl": session.cdp_url,
+        "cdpPort": session.cdp_port,
         "createdAt": session.created_at.isoformat(),
         "lifetime": str(session.lifetime())
     })
