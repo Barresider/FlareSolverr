@@ -1,4 +1,5 @@
 import logging
+import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Optional, Tuple
@@ -14,6 +15,7 @@ class Session:
     session_id: str
     driver: WebDriver
     created_at: datetime
+    cdp_url: Optional[str] = None
 
     def lifetime(self) -> timedelta:
         return datetime.now() - self.created_at
@@ -47,7 +49,11 @@ class SessionsStorage:
 
         driver = utils.get_webdriver(proxy)
         created_at = datetime.now()
-        session = Session(session_id, driver, created_at)
+        
+        cdp_port = os.environ.get('CDP_PORT', '9222')
+        cdp_url = f'http://localhost:{cdp_port}'
+        
+        session = Session(session_id, driver, created_at, cdp_url)
 
         self.sessions[session_id] = session
 

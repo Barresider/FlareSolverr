@@ -149,6 +149,14 @@ def get_webdriver(proxy: dict = None) -> WebDriver:
         options.add_argument('--disable-gpu-sandbox')
     options.add_argument('--ignore-certificate-errors')
     options.add_argument('--ignore-ssl-errors')
+    
+    cdp_port = os.environ.get('CDP_PORT', '9222')
+    options.debugger_address = f'127.0.0.1:{cdp_port}'
+    logging.info(f"Setting debugger_address to: {options.debugger_address}")
+    
+    if not get_config_headless():
+        logging.info("Adding visibility flags for non-headless mode")
+        options.add_argument('--start-maximized')
 
     language = os.environ.get('LANG', None)
     if language is not None:
@@ -176,6 +184,8 @@ def get_webdriver(proxy: dict = None) -> WebDriver:
             windows_headless = True
         else:
             start_xvfb_display()
+    else:
+        logging.info(f"Launching browser in VISIBLE mode (windows_headless={windows_headless}, headless={get_config_headless()})")
     # For normal headless mode:
     # options.add_argument('--headless')
 
@@ -195,10 +205,12 @@ def get_webdriver(proxy: dict = None) -> WebDriver:
 
     # downloads and patches the chromedriver
     # if we don't set driver_executable_path it downloads, patches, and deletes the driver each time
+    logging.info(f"Creating Chrome browser: headless={get_config_headless()}, windows_headless={windows_headless}")
     try:
         driver = uc.Chrome(options=options, browser_executable_path=browser_executable_path,
                            driver_executable_path=driver_exe_path, version_main=version_main,
                            windows_headless=windows_headless, headless=get_config_headless())
+        logging.info(f"Chrome browser created successfully - should be {'HIDDEN' if get_config_headless() else 'VISIBLE'}")
     except Exception as e:
         logging.error("Error starting Chrome: %s" % e)
         # No point in continuing if we cannot retrieve the driver

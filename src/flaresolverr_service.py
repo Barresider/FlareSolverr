@@ -136,6 +136,8 @@ def _controller_v1_handler(req: V1RequestBase) -> V1ResponseBase:
         res = _cmd_sessions_create(req)
     elif req.cmd == 'sessions.list':
         res = _cmd_sessions_list(req)
+    elif req.cmd == 'sessions.info':
+        res = _cmd_sessions_info(req)
     elif req.cmd == 'sessions.destroy':
         res = _cmd_sessions_destroy(req)
     elif req.cmd == 'request.get':
@@ -207,6 +209,26 @@ def _cmd_sessions_list(req: V1RequestBase) -> V1ResponseBase:
         "status": STATUS_OK,
         "message": "",
         "sessions": session_ids
+    })
+
+
+def _cmd_sessions_info(req: V1RequestBase) -> V1ResponseBase:
+    session_id = req.session
+    if not session_id:
+        raise Exception("Request parameter 'session' is mandatory in 'sessions.info' command.")
+    
+    if not SESSIONS_STORAGE.exists(session_id):
+        raise Exception("The session doesn't exist.")
+    
+    session = SESSIONS_STORAGE.sessions[session_id]
+    
+    return V1ResponseBase({
+        "status": STATUS_OK,
+        "message": "Session info retrieved successfully.",
+        "session": session_id,
+        "cdpUrl": session.cdp_url,
+        "createdAt": session.created_at.isoformat(),
+        "lifetime": str(session.lifetime())
     })
 
 
