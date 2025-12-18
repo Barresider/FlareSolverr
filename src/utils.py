@@ -149,6 +149,11 @@ def get_webdriver(proxy: dict = None, cdp_port: int = None) -> WebDriver:
         options.add_argument('--disable-gpu-sandbox')
     options.add_argument('--ignore-certificate-errors')
     options.add_argument('--ignore-ssl-errors')
+    options.add_argument('--disable-notifications')
+    options.add_argument('--disable-save-password-bubble')
+    options.add_argument('--disable-features=PasswordManagerEnabled')
+    options.add_argument('--disable-blink-features=AutomationControlled')
+    options.add_argument('--disable-infobars')
     
     if cdp_port is not None:
         options.debugger_address = f'127.0.0.1:{cdp_port}'
