@@ -249,6 +249,7 @@ def _cmd_sessions_destroy(req: V1RequestBase) -> V1ResponseBase:
 def _resolve_challenge(req: V1RequestBase, method: str) -> ChallengeResolutionT:
     timeout = int(req.maxTimeout) / 1000
     driver = None
+    session = None
     try:
         if req.session:
             session_id = req.session
@@ -267,6 +268,10 @@ def _resolve_challenge(req: V1RequestBase, method: str) -> ChallengeResolutionT:
             logging.debug('New instance of webdriver has been created to perform the request')
         return func_timeout(timeout, _evil_logic, (req, driver, method))
     except FunctionTimedOut:
+        # Mark session as unhealthy so it gets recreated on next use
+        if session is not None:
+            session.unhealthy = True
+            logging.warning(f"Session {session.session_id} marked unhealthy due to timeout")
         raise Exception(f'Error solving the challenge. Timeout after {timeout} seconds.')
     except Exception as e:
         raise Exception('Error solving the challenge. ' + str(e).replace('\n', '\\n'))

@@ -1,7 +1,10 @@
 import logging
 import os
+import signal
 import socket
-from dataclasses import dataclass
+import subprocess
+import threading
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Optional, Tuple
 from uuid import uuid1
@@ -27,6 +30,7 @@ class Session:
     created_at: datetime
     cdp_port: int
     cdp_url: str
+    unhealthy: bool = field(default=False)  # Mark unhealthy on timeout
 
     def lifetime(self) -> timedelta:
         return datetime.now() - self.created_at
@@ -37,6 +41,7 @@ class SessionsStorage:
 
     def __init__(self):
         self.sessions = {}
+        self._lock = threading.Lock()
 
     def create(self, session_id: Optional[str] = None, proxy: Optional[dict] = None,
                force_new: Optional[bool] = False) -> Tuple[Session, bool]:
@@ -47,7 +52,7 @@ class SessionsStorage:
 
         Note: The function is idempotent, so in case if session_id
         already exists in the storage a new instance of WebDriver won't be created
-        and existing session will be returned. Second argument defines if 
+        and existing session will be returned. Second argument defines if
         new session has been created (True) or an existing one was used (False).
         """
         session_id = session_id or str(uuid1())
@@ -55,30 +60,32 @@ class SessionsStorage:
         if force_new:
             self.destroy(session_id)
 
-        if self.exists(session_id):
-            return self.sessions[session_id], False
+        with self._lock:
+            if self.exists(session_id):
+                return self.sessions[session_id], False
 
-        env_cdp_port = os.environ.get('CDP_PORT')
-        if env_cdp_port:
-            cdp_port = int(env_cdp_port)
-            logging.info(f"Using CDP_PORT from environment: {cdp_port}")
-        else:
-            cdp_port = find_free_port()
-            logging.info(f"Allocated dynamic CDP port: {cdp_port}")
-        
-        cdp_url = f'http://localhost:{cdp_port}'
-        
-        driver = utils.get_webdriver(proxy, cdp_port=cdp_port)
-        created_at = datetime.now()
-        
-        session = Session(session_id, driver, created_at, cdp_port, cdp_url)
+            env_cdp_port = os.environ.get('CDP_PORT')
+            if env_cdp_port:
+                cdp_port = int(env_cdp_port)
+                logging.info(f"Using CDP_PORT from environment: {cdp_port}")
+            else:
+                cdp_port = find_free_port()
+                logging.info(f"Allocated dynamic CDP port: {cdp_port}")
 
-        self.sessions[session_id] = session
+            cdp_url = f'http://localhost:{cdp_port}'
 
-        return session, True
+            driver = utils.get_webdriver(proxy, cdp_port=cdp_port)
+            created_at = datetime.now()
+
+            session = Session(session_id, driver, created_at, cdp_port, cdp_url)
+
+            self.sessions[session_id] = session
+
+            return session, True
 
     def exists(self, session_id: str) -> bool:
-        return session_id in self.sessions
+        with self._lock:
+            return session_id in self.sessions
 
     def destroy(self, session_id: str) -> bool:
         """destroy closes the driver instance and removes session from the storage.
@@ -86,23 +93,117 @@ class SessionsStorage:
         The function returns True if session was found and destroyed,
         and False if session_id wasn't found.
         """
-        if not self.exists(session_id):
-            return False
+        # Pop session from storage while holding lock
+        with self._lock:
+            if session_id not in self.sessions:
+                return False
+            session = self.sessions.pop(session_id)
 
-        session = self.sessions.pop(session_id)
-        if utils.PLATFORM_VERSION == "nt":
-            session.driver.close()
-        session.driver.quit()
+        # Perform cleanup OUTSIDE lock (slow operation)
+        self._cleanup_driver(session.driver, session.cdp_port)
         return True
+
+    def _find_pid_by_port(self, port: int) -> Optional[int]:
+        """Find the process ID that is listening on the given port."""
+        try:
+            if os.name == 'nt':
+                # Windows: use netstat to find the PID
+                result = subprocess.run(
+                    ['netstat', '-ano'],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+                for line in result.stdout.splitlines():
+                    # Look for LISTENING on the specific port
+                    if f':{port}' in line and 'LISTENING' in line:
+                        parts = line.split()
+                        if len(parts) >= 5:
+                            pid = int(parts[-1])
+                            logging.debug(f"Found PID {pid} listening on port {port}")
+                            return pid
+            else:
+                # Linux/Mac: use lsof
+                result = subprocess.run(
+                    ['lsof', '-i', f':{port}', '-t'],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+                if result.stdout.strip():
+                    pid = int(result.stdout.strip().split('\n')[0])
+                    logging.debug(f"Found PID {pid} listening on port {port}")
+                    return pid
+        except Exception as e:
+            logging.warning(f"Failed to find PID by port {port}: {e}")
+        return None
+
+    def _cleanup_driver(self, driver: WebDriver, cdp_port: Optional[int] = None):
+        """Clean up a WebDriver instance, using force-kill by CDP port if graceful quit fails."""
+        # Find Chrome PID BEFORE quit (it may release port after quit but still be running)
+        chrome_pid = None
+        if cdp_port:
+            chrome_pid = self._find_pid_by_port(cdp_port)
+            if chrome_pid:
+                logging.debug(f"Found Chrome PID {chrome_pid} on CDP port {cdp_port} before cleanup")
+
+        # Try graceful quit first
+        graceful_success = False
+        try:
+            if utils.PLATFORM_VERSION == "nt":
+                driver.close()
+            driver.quit()
+            logging.debug("Driver quit gracefully")
+            graceful_success = True
+        except Exception as e:
+            logging.warning(f"Graceful quit failed: {e}")
+
+        # On Windows, always verify Chrome is dead and force-kill if needed
+        if os.name == 'nt' and chrome_pid:
+            # Check if Chrome is still running
+            try:
+                result = subprocess.run(
+                    ['tasklist', '/FI', f'PID eq {chrome_pid}'],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                if str(chrome_pid) in result.stdout:
+                    logging.debug(f"Chrome PID {chrome_pid} still running after quit, force-killing")
+                    subprocess.run(
+                        ['taskkill', '/F', '/T', '/PID', str(chrome_pid)],
+                        timeout=10,
+                        capture_output=True
+                    )
+                    logging.info(f"Force-killed Chrome process PID {chrome_pid} (CDP port {cdp_port})")
+            except Exception as e:
+                logging.warning(f"Post-quit cleanup check failed: {e}")
+        elif not graceful_success and chrome_pid:
+            # Non-Windows: force kill if graceful failed
+            try:
+                os.kill(chrome_pid, signal.SIGKILL)
+                logging.info(f"Force-killed Chrome process PID {chrome_pid} (CDP port {cdp_port})")
+            except Exception as e:
+                logging.warning(f"Force kill by PID {chrome_pid} failed: {e}")
 
     def get(self, session_id: str, ttl: Optional[timedelta] = None) -> Tuple[Session, bool]:
         session, fresh = self.create(session_id)
 
-        if ttl is not None and not fresh and session.lifetime() > ttl:
-            logging.debug(f'session\'s lifetime has expired, so the session is recreated (session_id={session_id})')
+        # Recreate if TTL expired or marked unhealthy
+        should_recreate = False
+        if not fresh:
+            if session.unhealthy:
+                logging.debug(f'session is unhealthy, recreating (session_id={session_id})')
+                should_recreate = True
+            elif ttl is not None and session.lifetime() > ttl:
+                logging.debug(f'session\'s lifetime has expired, so the session is recreated (session_id={session_id})')
+                should_recreate = True
+
+        if should_recreate:
             session, fresh = self.create(session_id, force_new=True)
 
         return session, fresh
 
     def session_ids(self) -> list[str]:
-        return list(self.sessions.keys())
+        with self._lock:
+            return list(self.sessions.keys())
