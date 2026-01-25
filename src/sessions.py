@@ -61,7 +61,8 @@ class SessionsStorage:
             self.destroy(session_id)
 
         with self._lock:
-            if self.exists(session_id):
+            # Check directly - don't call exists() as that would deadlock
+            if session_id in self.sessions:
                 return self.sessions[session_id], False
 
             env_cdp_port = os.environ.get('CDP_PORT')

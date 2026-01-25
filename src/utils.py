@@ -155,6 +155,7 @@ def get_webdriver(proxy: dict = None, cdp_port: int = None) -> WebDriver:
     options.add_argument('--disable-blink-features=AutomationControlled')
     options.add_argument('--disable-infobars')
     
+    # undetected_chromedriver uses debugger_address to set --remote-debugging-port
     if cdp_port is not None:
         options.debugger_address = f'127.0.0.1:{cdp_port}'
         logging.info(f"Setting debugger_address to: {options.debugger_address}")
@@ -230,7 +231,10 @@ def get_webdriver(proxy: dict = None, cdp_port: int = None) -> WebDriver:
     if driver_exe_path is None:
         PATCHED_DRIVER_PATH = os.path.join(driver.patcher.data_path, driver.patcher.exe_name)
         if PATCHED_DRIVER_PATH != driver.patcher.executable_path:
-            shutil.copy(driver.patcher.executable_path, PATCHED_DRIVER_PATH)
+            try:
+                shutil.copy(driver.patcher.executable_path, PATCHED_DRIVER_PATH)
+            except PermissionError:
+                logging.debug("Could not cache patched driver (file locked), will retry next time")
 
     # clean up proxy extension directory
     if proxy_extension_dir is not None:
