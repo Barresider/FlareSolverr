@@ -31,9 +31,24 @@ class Session:
     cdp_port: int
     cdp_url: str
     unhealthy: bool = field(default=False)  # Mark unhealthy on timeout
+    idle_minutes: Optional[int] = field(default=None)  # Auto-destroy after this duration of inactivity
+    last_activity: datetime = field(default_factory=datetime.now)  # Track last activity for inactivity-based cleanup
 
     def lifetime(self) -> timedelta:
         return datetime.now() - self.created_at
+
+    def time_since_last_activity(self) -> timedelta:
+        return datetime.now() - self.last_activity
+
+    def is_expired(self) -> bool:
+        """Check if session has exceeded its idle timeout."""
+        if self.idle_minutes is None:
+            return False
+        return self.time_since_last_activity() > timedelta(minutes=self.idle_minutes)
+
+    def touch(self):
+        """Update last activity timestamp to reset inactivity timer."""
+        self.last_activity = datetime.now()
 
 
 class SessionsStorage:
@@ -42,9 +57,13 @@ class SessionsStorage:
     def __init__(self):
         self.sessions = {}
         self._lock = threading.Lock()
+        self._cleanup_thread: Optional[threading.Thread] = None
+        self._cleanup_stop_event = threading.Event()
+        self._cleanup_interval_seconds = 60  # Check every minute by default
 
     def create(self, session_id: Optional[str] = None, proxy: Optional[dict] = None,
-               force_new: Optional[bool] = False) -> Tuple[Session, bool]:
+               force_new: Optional[bool] = False,
+               idle_minutes: Optional[int] = None) -> Tuple[Session, bool]:
         """create creates new instance of WebDriver if necessary,
         assign defined (or newly generated) session_id to the instance
         and returns the session object. If a new session has been created
@@ -54,6 +73,9 @@ class SessionsStorage:
         already exists in the storage a new instance of WebDriver won't be created
         and existing session will be returned. Second argument defines if
         new session has been created (True) or an existing one was used (False).
+
+        If idle_minutes is provided, the session will be automatically
+        destroyed by the cleanup thread after this duration of inactivity.
         """
         session_id = session_id or str(uuid1())
 
@@ -63,7 +85,11 @@ class SessionsStorage:
         with self._lock:
             # Check directly - don't call exists() as that would deadlock
             if session_id in self.sessions:
-                return self.sessions[session_id], False
+                existing_session = self.sessions[session_id]
+                # Update idle_minutes if provided and session exists
+                if idle_minutes is not None:
+                    existing_session.idle_minutes = idle_minutes
+                return existing_session, False
 
             env_cdp_port = os.environ.get('CDP_PORT')
             if env_cdp_port:
@@ -78,7 +104,11 @@ class SessionsStorage:
             driver = utils.get_webdriver(proxy, cdp_port=cdp_port)
             created_at = datetime.now()
 
-            session = Session(session_id, driver, created_at, cdp_port, cdp_url)
+            session = Session(session_id, driver, created_at, cdp_port, cdp_url,
+                              idle_minutes=idle_minutes)
+
+            if idle_minutes is not None:
+                logging.info(f"Session {session_id} created with idle_minutes={idle_minutes}")
 
             self.sessions[session_id] = session
 
@@ -208,3 +238,68 @@ class SessionsStorage:
     def session_ids(self) -> list[str]:
         with self._lock:
             return list(self.sessions.keys())
+
+    def cleanup_expired_sessions(self) -> int:
+        """Check all sessions and destroy those that have exceeded their max lifetime.
+        Returns the number of sessions cleaned up.
+        """
+        sessions_to_destroy = []
+
+        # Collect expired sessions while holding lock briefly
+        with self._lock:
+            for session_id, session in self.sessions.items():
+                if session.is_expired():
+                    sessions_to_destroy.append((session_id, session.time_since_last_activity(), session.idle_minutes))
+
+        # Destroy sessions outside lock (slow operation)
+        cleaned_up = 0
+        for session_id, inactivity, idle_mins in sessions_to_destroy:
+            logging.info(f"Auto-destroying idle session {session_id} "
+                         f"(idle for {inactivity}, idle_minutes={idle_mins})")
+            try:
+                self.destroy(session_id)
+                cleaned_up += 1
+            except Exception as e:
+                logging.warning(f"Failed to destroy expired session {session_id}: {e}")
+
+        return cleaned_up
+
+    def _cleanup_loop(self):
+        """Background thread loop that periodically cleans up expired sessions."""
+        logging.info(f"Session cleanup thread started (interval={self._cleanup_interval_seconds}s)")
+        while not self._cleanup_stop_event.is_set():
+            try:
+                cleaned = self.cleanup_expired_sessions()
+                if cleaned > 0:
+                    logging.info(f"Cleanup thread destroyed {cleaned} expired session(s)")
+            except Exception as e:
+                logging.error(f"Error in cleanup thread: {e}")
+
+            # Wait for interval or stop event
+            self._cleanup_stop_event.wait(self._cleanup_interval_seconds)
+
+        logging.info("Session cleanup thread stopped")
+
+    def start_cleanup_thread(self, interval_seconds: int = 60):
+        """Start the background cleanup thread.
+
+        Args:
+            interval_seconds: How often to check for expired sessions (default: 60)
+        """
+        if self._cleanup_thread is not None and self._cleanup_thread.is_alive():
+            logging.warning("Cleanup thread already running")
+            return
+
+        self._cleanup_interval_seconds = interval_seconds
+        self._cleanup_stop_event.clear()
+        self._cleanup_thread = threading.Thread(target=self._cleanup_loop, daemon=True)
+        self._cleanup_thread.start()
+
+    def stop_cleanup_thread(self):
+        """Stop the background cleanup thread."""
+        if self._cleanup_thread is None or not self._cleanup_thread.is_alive():
+            return
+
+        self._cleanup_stop_event.set()
+        self._cleanup_thread.join(timeout=5)
+        self._cleanup_thread = None

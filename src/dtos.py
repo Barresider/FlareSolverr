@@ -37,6 +37,7 @@ class V1RequestBase(object):
     proxy: dict = None
     session: str = None
     session_ttl_minutes: int = None
+    session_idle_minutes: int = None  # Auto-destroy session after this duration of inactivity
     headers: list = None  # deprecated v2.0.0, not used
     userAgent: str = None  # deprecated v2.0.0, not used
 

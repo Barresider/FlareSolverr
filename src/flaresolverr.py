@@ -11,6 +11,7 @@ from bottle_plugins.logger_plugin import logger_plugin
 from bottle_plugins import prometheus_plugin
 from dtos import V1RequestBase
 import flaresolverr_service
+from flaresolverr_service import SESSIONS_STORAGE
 import utils
 
 env_proxy_url = os.environ.get('PROXY_URL', None)
@@ -140,6 +141,11 @@ if __name__ == "__main__":
     app.install(error_plugin)
     prometheus_plugin.setup()
     app.install(prometheus_plugin.prometheus_plugin)
+
+    # start session cleanup thread
+    cleanup_interval = int(os.environ.get('SESSION_CLEANUP_INTERVAL', 60))
+    SESSIONS_STORAGE.start_cleanup_thread(interval_seconds=cleanup_interval)
+    logging.info(f'Session cleanup thread started (interval={cleanup_interval}s)')
 
     # start webserver
     # default server 'wsgiref' does not support concurrent requests

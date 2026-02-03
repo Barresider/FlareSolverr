@@ -139,6 +139,8 @@ def _controller_v1_handler(req: V1RequestBase) -> V1ResponseBase:
         res = _cmd_sessions_info(req)
     elif req.cmd == 'sessions.destroy':
         res = _cmd_sessions_destroy(req)
+    elif req.cmd == 'sessions.keepalive':
+        res = _cmd_sessions_keepalive(req)
     elif req.cmd == 'request.get':
         res = _cmd_request_get(req)
     elif req.cmd == 'request.post':
@@ -184,19 +186,30 @@ def _cmd_request_post(req: V1RequestBase) -> V1ResponseBase:
 def _cmd_sessions_create(req: V1RequestBase) -> V1ResponseBase:
     logging.debug("Creating new session...")
 
-    session, fresh = SESSIONS_STORAGE.create(session_id=req.session, proxy=req.proxy)
+    session, fresh = SESSIONS_STORAGE.create(
+        session_id=req.session,
+        proxy=req.proxy,
+        idle_minutes=req.session_idle_minutes
+    )
     session_id = session.session_id
 
     if not fresh:
+        session.touch()  # Reset idle timer on re-access
+        msg = "Session already exists."
+        if req.session_idle_minutes is not None:
+            msg += f" Idle timeout updated to {req.session_idle_minutes} minutes."
         return V1ResponseBase({
             "status": STATUS_OK,
-            "message": "Session already exists.",
+            "message": msg,
             "session": session_id
         })
 
+    msg = "Session created successfully."
+    if req.session_idle_minutes is not None:
+        msg += f" Will auto-destroy after {req.session_idle_minutes} minutes idle."
     return V1ResponseBase({
         "status": STATUS_OK,
-        "message": "Session created successfully.",
+        "message": msg,
         "session": session_id
     })
 
@@ -242,6 +255,26 @@ def _cmd_sessions_destroy(req: V1RequestBase) -> V1ResponseBase:
     return V1ResponseBase({
         "status": STATUS_OK,
         "message": "The session has been removed."
+    })
+
+
+def _cmd_sessions_keepalive(req: V1RequestBase) -> V1ResponseBase:
+    session_id = req.session
+    if not session_id:
+        raise Exception("Request parameter 'session' is mandatory in 'sessions.keepalive' command.")
+
+    if not SESSIONS_STORAGE.exists(session_id):
+        raise Exception("The session doesn't exist.")
+
+    session = SESSIONS_STORAGE.sessions[session_id]
+    session.touch()
+
+    return V1ResponseBase({
+        "status": STATUS_OK,
+        "message": "Session keepalive successful.",
+        "session": session_id,
+        "lifetime": str(session.lifetime()),
+        "lastActivity": session.last_activity.isoformat()
     })
 
 
