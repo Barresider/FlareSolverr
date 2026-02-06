@@ -91,13 +91,10 @@ class SessionsStorage:
                     existing_session.idle_minutes = idle_minutes
                 return existing_session, False
 
-            env_cdp_port = os.environ.get('CDP_PORT')
-            if env_cdp_port:
-                cdp_port = int(env_cdp_port)
-                logging.info(f"Using CDP_PORT from environment: {cdp_port}")
-            else:
-                cdp_port = find_free_port()
-                logging.info(f"Allocated dynamic CDP port: {cdp_port}")
+            # Always allocate a unique port per session to avoid conflicts
+            # when multiple providers run simultaneously
+            cdp_port = find_free_port()
+            logging.info(f"Allocated dynamic CDP port: {cdp_port}")
 
             cdp_url = f'http://localhost:{cdp_port}'
 
