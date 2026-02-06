@@ -247,8 +247,13 @@ class SessionsStorage:
 
         # Collect expired sessions while holding lock briefly
         with self._lock:
+            logging.debug(f"Cleanup check: {len(self.sessions)} sessions to check")
             for session_id, session in self.sessions.items():
-                if session.is_expired():
+                is_exp = session.is_expired()
+                logging.debug(f"  Session {session_id}: idle_minutes={session.idle_minutes}, "
+                              f"time_since_activity={session.time_since_last_activity()}, "
+                              f"is_expired={is_exp}")
+                if is_exp:
                     sessions_to_destroy.append((session_id, session.time_since_last_activity(), session.idle_minutes))
 
         # Destroy sessions outside lock (slow operation)

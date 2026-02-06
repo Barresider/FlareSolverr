@@ -228,12 +228,12 @@ def _cmd_sessions_info(req: V1RequestBase) -> V1ResponseBase:
     session_id = req.session
     if not session_id:
         raise Exception("Request parameter 'session' is mandatory in 'sessions.info' command.")
-    
+
     if not SESSIONS_STORAGE.exists(session_id):
         raise Exception("The session doesn't exist.")
-    
+
     session = SESSIONS_STORAGE.sessions[session_id]
-    
+
     return V1ResponseBase({
         "status": STATUS_OK,
         "message": "Session info retrieved successfully.",
@@ -241,7 +241,11 @@ def _cmd_sessions_info(req: V1RequestBase) -> V1ResponseBase:
         "cdpUrl": session.cdp_url,
         "cdpPort": session.cdp_port,
         "createdAt": session.created_at.isoformat(),
-        "lifetime": str(session.lifetime())
+        "lifetime": str(session.lifetime()),
+        "idleMinutes": session.idle_minutes,
+        "lastActivity": session.last_activity.isoformat(),
+        "timeSinceLastActivity": str(session.time_since_last_activity()),
+        "isExpired": session.is_expired()
     })
 
 
@@ -291,6 +295,8 @@ def _resolve_challenge(req: V1RequestBase, method: str) -> ChallengeResolutionT:
             if fresh:
                 logging.debug(f"new session created to perform the request (session_id={session_id})")
             else:
+                # Reset idle timer when session is actively used
+                session.touch()
                 logging.debug(f"existing session is used to perform the request (session_id={session_id}, "
                               f"lifetime={str(session.lifetime())}, ttl={str(ttl)})")
 
