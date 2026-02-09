@@ -43,8 +43,6 @@ RUN dpkg -i /libgl1-mesa-dri.deb \
     && mkdir /config \
     && chown flaresolverr:flaresolverr /config
 
-VOLUME /config
-
 # Install Python dependencies
 COPY requirements.txt .
 RUN pip install -r requirements.txt \
