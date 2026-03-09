@@ -99,16 +99,36 @@ class SessionsStorage:
 
             cdp_url = f'http://localhost:{cdp_port}'
 
-            driver = utils.get_webdriver(proxy, cdp_port=cdp_port, chrome_flags=chrome_flags)
-            created_at = datetime.now()
+            driver = None
+            try:
+                driver = utils.get_webdriver(proxy, cdp_port=cdp_port, chrome_flags=chrome_flags)
+                created_at = datetime.now()
 
-            session = Session(session_id, driver, created_at, cdp_port, cdp_url,
-                              idle_minutes=idle_minutes)
+                session = Session(session_id, driver, created_at, cdp_port, cdp_url,
+                                  idle_minutes=idle_minutes)
 
-            if idle_minutes is not None:
-                logging.info(f"Session {session_id} created with idle_minutes={idle_minutes}")
+                if idle_minutes is not None:
+                    logging.info(f"Session {session_id} created with idle_minutes={idle_minutes}")
 
-            self.sessions[session_id] = session
+                self.sessions[session_id] = session
+            except Exception:
+                logging.error(f"Failed to create session {session_id}, cleaning up Chrome on port {cdp_port}")
+                if driver is not None:
+                    self._cleanup_driver(driver, cdp_port)
+                else:
+                    # get_webdriver raised but Chrome may already be running on the CDP port
+                    chrome_pid = self._find_pid_by_port(cdp_port)
+                    if chrome_pid:
+                        logging.warning(f"Killing orphaned Chrome PID {chrome_pid} on port {cdp_port}")
+                        try:
+                            subprocess.run(
+                                ['taskkill', '/F', '/T', '/PID', str(chrome_pid)],
+                                timeout=10,
+                                capture_output=True
+                            )
+                        except Exception as kill_err:
+                            logging.warning(f"Failed to kill orphaned Chrome: {kill_err}")
+                raise
 
             return session, True
 
@@ -137,6 +157,10 @@ class SessionsStorage:
         try:
             if os.name == 'nt':
                 # Windows: use netstat to find the PID
+                # Note: netstat state names are locale-dependent (e.g. 'LISTENING'
+                # on English, 'ABHÖREN' on German). We match on the port with
+                # 0.0.0.0:0 as the foreign address, which indicates a listening socket
+                # regardless of locale.
                 result = subprocess.run(
                     ['netstat', '-ano'],
                     capture_output=True,
@@ -144,8 +168,7 @@ class SessionsStorage:
                     timeout=10
                 )
                 for line in result.stdout.splitlines():
-                    # Look for LISTENING on the specific port
-                    if f':{port}' in line and 'LISTENING' in line:
+                    if f':{port}' in line and '0.0.0.0:0' in line:
                         parts = line.split()
                         if len(parts) >= 5:
                             pid = int(parts[-1])
