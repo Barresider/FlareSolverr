@@ -63,7 +63,8 @@ class SessionsStorage:
 
     def create(self, session_id: Optional[str] = None, proxy: Optional[dict] = None,
                force_new: Optional[bool] = False,
-               idle_minutes: Optional[int] = None) -> Tuple[Session, bool]:
+               idle_minutes: Optional[int] = None,
+               chrome_flags: Optional[list] = None) -> Tuple[Session, bool]:
         """create creates new instance of WebDriver if necessary,
         assign defined (or newly generated) session_id to the instance
         and returns the session object. If a new session has been created
@@ -98,7 +99,7 @@ class SessionsStorage:
 
             cdp_url = f'http://localhost:{cdp_port}'
 
-            driver = utils.get_webdriver(proxy, cdp_port=cdp_port)
+            driver = utils.get_webdriver(proxy, cdp_port=cdp_port, chrome_flags=chrome_flags)
             created_at = datetime.now()
 
             session = Session(session_id, driver, created_at, cdp_port, cdp_url,

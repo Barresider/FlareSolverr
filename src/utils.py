@@ -129,7 +129,7 @@ def create_proxy_extension(proxy: dict) -> str:
     return proxy_extension_dir
 
 
-def get_webdriver(proxy: dict = None, cdp_port: int = None) -> WebDriver:
+def get_webdriver(proxy: dict = None, cdp_port: int = None, chrome_flags: list = None) -> WebDriver:
     global PATCHED_DRIVER_PATH, USER_AGENT
     logging.debug('Launching web browser...')
 
@@ -154,7 +154,12 @@ def get_webdriver(proxy: dict = None, cdp_port: int = None) -> WebDriver:
     options.add_argument('--disable-features=PasswordManagerEnabled')
     options.add_argument('--disable-blink-features=AutomationControlled')
     options.add_argument('--disable-infobars')
-    
+
+    # Apply per-session Chrome flags from API
+    for flag in (chrome_flags or []):
+        options.add_argument(flag)
+        logging.info(f"Added Chrome flag from API: {flag}")
+
     # undetected_chromedriver uses debugger_address to set --remote-debugging-port
     if cdp_port is not None:
         options.debugger_address = f'127.0.0.1:{cdp_port}'

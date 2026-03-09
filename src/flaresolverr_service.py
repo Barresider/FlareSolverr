@@ -189,7 +189,8 @@ def _cmd_sessions_create(req: V1RequestBase) -> V1ResponseBase:
     session, fresh = SESSIONS_STORAGE.create(
         session_id=req.session,
         proxy=req.proxy,
-        idle_minutes=req.session_idle_minutes
+        idle_minutes=req.session_idle_minutes,
+        chrome_flags=req.chromeFlags
     )
     session_id = session.session_id
 

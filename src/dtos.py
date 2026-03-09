@@ -53,6 +53,8 @@ class V1RequestBase(object):
     disableMedia: bool = None
     # Optional when you've got a turnstile captcha that needs to be clicked after X number of Tab presses
     tabs_till_verify : int = None
+    # Per-session Chrome flags (e.g. ["--window-size=1280,720", "--disable-background-timer-throttling"])
+    chromeFlags: list = None
 
     def __init__(self, _dict):
         self.__dict__.update(_dict)
